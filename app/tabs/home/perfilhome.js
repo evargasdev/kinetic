@@ -225,19 +225,19 @@ export default function ProfileScreen() {
         <View style={styles.gridContainer}>
           <View style={styles.gridRow}>
             <View style={styles.gridItem}>
-              <Text style={styles.statValue}>{profile?.edad ?? "20"}</Text>
+              <Text style={styles.statValue}>{profile?.edad ?? "—"}</Text>
               <Text style={styles.statLabel}>{t("age", "AGE").toUpperCase()}</Text>
             </View>
 
             <View style={styles.gridItem}>
-              <Text style={styles.statValue}>{profile?.peso_kg ? `${profile.peso_kg}kg` : "80kg"}</Text>
+              <Text style={styles.statValue}>{profile?.peso_kg ? `${profile.peso_kg}kg` : "—"}</Text>
               <Text style={styles.statLabel}>{t("weight", "WEIGHT").toUpperCase()}</Text>
             </View>
           </View>
 
           <View style={styles.gridRow}>
             <View style={styles.gridItem}>
-              <Text style={styles.statValue}>{profile?.altura_cm ? `${profile.altura_cm}cm` : "190cm"}</Text>
+              <Text style={styles.statValue}>{profile?.altura_cm ? `${profile.altura_cm}cm` : "—"}</Text>
               <Text style={styles.statLabel}>{t("height", "HEIGHT").toUpperCase()}</Text>
             </View>
 

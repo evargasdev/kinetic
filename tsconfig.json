@@ -12,5 +12,9 @@
     "**/*.ts",
     "**/*.tsx",
     "App.js"
+  ],
+  "exclude": [
+    "node_modules",
+    "supabase/functions"
   ]
 }

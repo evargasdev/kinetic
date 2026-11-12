@@ -57,13 +57,17 @@ export default function ScreenCalculator() {
   const txt = TEXTOS_LOCALES[idiomaActual];
 
   const calculate1RM = () => {
-    const w = parseFloat(weight);
-    const r = parseFloat(reps);
-    if (!w || !r) return;
-    if (r === 1 || r === "1") return setResult(w);
-    const oneRM = w * (1 + r / 30);
-    setResult(Math.round(oneRM));
-    Keyboard.dismiss(); // Baja el teclado automáticamente al calcular
+    Keyboard.dismiss();
+    const w = parseFloat(weight.replace(",", "."));
+    const r = parseInt(reps, 10);
+    // Peso y repeticiones deben ser positivos
+    if (!(w > 0) || !(r > 0)) {
+      setResult(0);
+      return;
+    }
+    // Epley: con 1 repetición el 1RM es el propio peso
+    const oneRM = r === 1 ? w : w * (1 + r / 30);
+    setResult(Math.round(oneRM * 10) / 10);
   };
 
   return (

@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useCallback, useContext, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
   ActivityIndicator,
@@ -12,9 +12,27 @@ import {
   View
 } from "react-native";
 import { Searchbar } from "react-native-paper";
+import { AuthContext } from "../../context/AuthContext";
 import { supabase } from "../../subapaseClient";
 
 const ADMIN_FUNCTION = "admin-panel";
+
+// Llama a la Edge Function y lanza un Error con el mensaje real del servidor
+// (functions.invoke solo dice "non-2xx status code" si no se lee el cuerpo).
+const invocarAdmin = async (body) => {
+  const { data, error } = await supabase.functions.invoke(ADMIN_FUNCTION, { method: "POST", body });
+  if (error) {
+    let mensaje = error.message;
+    try {
+      const detalle = await error.context?.json?.();
+      if (detalle?.error) mensaje = detalle.error;
+    } catch (_e) {
+      // cuerpo no JSON: se conserva el mensaje original
+    }
+    throw new Error(mensaje);
+  }
+  return data;
+};
 
 const TEXTOS_ADMIN = {
   es: {
@@ -61,6 +79,7 @@ const TEXTOS_ADMIN = {
 
 export default function ScreenAdmin() {
   const { i18n } = useTranslation();
+  const { logout } = useContext(AuthContext);
   const [usuarios, setUsuarios] = useState([]);
   const [buscar, setBuscar] = useState("");
   const [loading, setLoading] = useState(true);
@@ -70,38 +89,24 @@ export default function ScreenAdmin() {
   const idioma = i18n.language?.startsWith("es") ? "es" : "en";
   const txt = TEXTOS_ADMIN[idioma];
 
-  useEffect(() => {
-    const timer = setTimeout(() => {
-      cargarUsuarios();
-    }, 350);
-
-    return () => clearTimeout(timer);
+  const cargarUsuarios = useCallback(async () => {
+    try {
+      setLoading(true);
+      const data = await invocarAdmin({ action: "list", search: buscar.trim(), role: filtroRol });
+      setUsuarios(Array.isArray(data?.users) ? data.users : []);
+    } catch (error) {
+      console.error("Error cargando usuarios:", error.message);
+      Alert.alert("Error", error.message || "No se pudo cargar el panel admin.");
+    } finally {
+      setLoading(false);
+    }
   }, [buscar, filtroRol]);
 
-const cargarUsuarios = async () => {
-  try {
-    setLoading(true);
-
-    const { data, error } = await supabase.functions.invoke(ADMIN_FUNCTION, {
-      method: 'POST', // <-- Forzamos explícitamente el método POST
-      body: {
-        action: "list",
-        search: buscar.trim(),
-        role: filtroRol,
-      },
-    });
-
-    if (error) throw error;
-    setUsuarios(Array.isArray(data?.users) ? data.users : []);
-  } catch (error) {
-    console.error("Error cargando usuarios:", error.message);
-    Alert.alert("Error", error.message || "No se pudo cargar el panel admin.");
-  } finally {
-    setLoading(false);
-  }
-};
-
-  const filteredUsuarios = useMemo(() => usuarios, [usuarios]);
+  // Debounce de la búsqueda
+  useEffect(() => {
+    const timer = setTimeout(cargarUsuarios, 350);
+    return () => clearTimeout(timer);
+  }, [cargarUsuarios]);
 
   const handleLogout = () => {
     Alert.alert(
@@ -112,9 +117,7 @@ const cargarUsuarios = async () => {
         {
           text: txt.salir,
           style: "destructive",
-          onPress: async () => {
-            await supabase.auth.signOut();
-          },
+          onPress: logout,
         },
       ]
     );
@@ -164,14 +167,11 @@ const cargarUsuarios = async () => {
           text: "Confirmar",
           onPress: async () => {
             try {
-              const { error } = await supabase.functions.invoke(ADMIN_FUNCTION, {
-                body: {
+              await invocarAdmin({
                   action: "update-role",
                   userId,
                   role: nuevoRol,
-                },
-              });
-              if (error) throw error;
+                });
               Alert.alert("Éxito", `Rol actualizado correctamente.`);
               cargarUsuarios();
             } catch (err) {
@@ -195,14 +195,11 @@ const cargarUsuarios = async () => {
           style: estaSuspendido ? "default" : "destructive",
           onPress: async () => {
             try {
-              const { error } = await supabase.functions.invoke(ADMIN_FUNCTION, {
-                body: {
+              await invocarAdmin({
                   action: "toggle-active",
                   userId,
                   active: estaSuspendido ? true : false,
-                },
-              });
-              if (error) throw error;
+                });
               Alert.alert("Éxito", `Usuario modificado.`);
               cargarUsuarios();
             } catch (err) {
@@ -225,13 +222,10 @@ const cargarUsuarios = async () => {
           style: "destructive",
           onPress: async () => {
             try {
-              const { error } = await supabase.functions.invoke(ADMIN_FUNCTION, {
-                body: {
+              await invocarAdmin({
                   action: "delete-user",
                   userId,
-                },
-              });
-              if (error) throw error;
+                });
               Alert.alert("Éxito", "Usuario borrado.");
               cargarUsuarios();
             } catch (err) {
@@ -402,7 +396,7 @@ const cargarUsuarios = async () => {
           <ActivityIndicator size="large" color="#ff716c" style={{ marginTop: 40 }} />
         ) : (
           <FlatList
-            data={filteredUsuarios}
+            data={usuarios}
             keyExtractor={(item) => item.id?.toString()}
             renderItem={renderUsuario}
             showsVerticalScrollIndicator={false}

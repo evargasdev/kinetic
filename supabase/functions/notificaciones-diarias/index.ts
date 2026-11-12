@@ -1,42 +1,76 @@
 import { serve } from 'https://deno.land/std@0.208.0/http/server.ts'
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 
-serve(async (req: Request) => {
-  // 1. Conexión segura a tu base de datos
-  const supabaseUrl = Deno.env.get('SUPABASE_URL')!
-  const supabaseKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
-  const supabase = createClient(supabaseUrl, supabaseKey)
+// Expo acepta como máximo 100 mensajes por petición
+const EXPO_PUSH_URL = 'https://exp.host/--/api/v2/push/send'
+const EXPO_BATCH_SIZE = 100
 
-  // 2. Extraer a todos los usuarios que ya tienen un Token guardado
+const json = (body: unknown, status = 200) =>
+  new Response(JSON.stringify(body), {
+    status,
+    headers: { 'Content-Type': 'application/json' },
+  })
+
+serve(async (req: Request) => {
+  const supabaseUrl = Deno.env.get('SUPABASE_URL')!
+  const serviceRoleKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
+  const cronSecret = Deno.env.get('CRON_SECRET')
+
+  // 1. Solo el cron/servidor puede disparar el envío masivo.
+  //    La anon key es pública (va dentro de la app), así que no basta con un JWT válido:
+  //    se exige la service role key o un secreto propio en la cabecera x-cron-secret.
+  const authHeader = req.headers.get('Authorization') ?? ''
+  const esServiceRole = authHeader === `Bearer ${serviceRoleKey}`
+  const esCron = !!cronSecret && req.headers.get('x-cron-secret') === cronSecret
+  if (!esServiceRole && !esCron) {
+    return json({ error: 'Unauthorized' }, 401)
+  }
+
+  const supabase = createClient(supabaseUrl, serviceRoleKey)
+
+  // 2. Usuarios activos con token de Expo registrado
   const { data: usuarios, error } = await supabase
     .from('usuarios')
     .select('push_token')
     .not('push_token', 'is', null)
+    .or('activo.is.null,activo.eq.true') // neq(false) excluiría los NULL
 
   if (error) {
-    return new Response(JSON.stringify({ error: error.message }), { status: 500 })
+    return json({ error: error.message }, 500)
   }
 
-  // 3. Armar los mensajes para Expo
-  const messages = usuarios.map((perfil: any) => ({
-    to: perfil.push_token,
+  const tokens = [...new Set((usuarios ?? []).map((u: { push_token: string }) => u.push_token))]
+    .filter((t) => typeof t === 'string' && t.startsWith('ExponentPushToken'))
+
+  const messages = tokens.map((to) => ({
+    to,
     sound: 'default',
     title: '¡Es hora de moverte!',
     body: 'El sedentarismo no descansa, y nosotros tampoco. ¡Registra tu actividad de hoy en Kinetic!',
   }))
 
-  // 4. Disparar los mensajes a los servidores de Expo
-  const expoRes = await fetch('https://exp.host/--/api/v2/push/send', {
-    method: 'POST',
-    headers: {
-      'Accept': 'application/json',
-      'Accept-encoding': 'gzip, deflate',
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify(messages),
-  })
+  // 3. Enviar a Expo en lotes
+  const fallos: unknown[] = []
+  for (let i = 0; i < messages.length; i += EXPO_BATCH_SIZE) {
+    const lote = messages.slice(i, i + EXPO_BATCH_SIZE)
+    const expoRes = await fetch(EXPO_PUSH_URL, {
+      method: 'POST',
+      headers: {
+        Accept: 'application/json',
+        'Accept-encoding': 'gzip, deflate',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(lote),
+    })
+    const expoData = await expoRes.json().catch(() => null)
+    if (!expoRes.ok) {
+      fallos.push({ lote: i / EXPO_BATCH_SIZE, status: expoRes.status, detalle: expoData })
+    }
+  }
 
-  return new Response(JSON.stringify({ success: true, enviados: messages.length }), { 
-    headers: { "Content-Type": "application/json" } 
-  })
+  if (fallos.length > 0) {
+    return json({ error: 'Fallo al enviar a Expo', enviados: messages.length, fallos }, 502)
+  }
+
+  return json({ success: true, enviados: messages.length })
 })

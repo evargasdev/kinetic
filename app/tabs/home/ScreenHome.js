@@ -9,6 +9,7 @@ import traducciones from "../../../assets/data/traducciones.json";
 import { AuthContext } from "../../context/AuthContext";
 import i18n from "../../i18n";
 import { supabase } from "../../subapaseClient";
+import { fechaLocalISO } from "../../utils/fechas";
 
 const diccNormalizado = Object.keys(traducciones).reduce((acc, key) => {
   acc[key.toLowerCase().trim()] = traducciones[key];
@@ -71,7 +72,7 @@ export default function ScreenHome() {
           if (progressError) throw progressError;
 
           const agrupadoPorDia = (progressData || []).reduce((acc, curr) => {
-            const date = curr.fecha || new Date().toISOString().split('T')[0];
+            const date = curr.fecha || fechaLocalISO();
             if (!acc[date]) acc[date] = { dateStr: date, volumen: 0, seriesTotales: 0, ejercicios: new Set() };
             acc[date].volumen += (curr.peso_kg * curr.repeticiones * curr.series) || 0;
             acc[date].seriesTotales += (curr.series || 0);
@@ -93,7 +94,7 @@ export default function ScreenHome() {
           for (let i = 6; i >= 0; i--) {
             const d = new Date(hoy);
             d.setDate(d.getDate() - i);
-            const dateStr = d.toISOString().split('T')[0];
+            const dateStr = fechaLocalISO(d);
             const infoDia = agrupadoPorDia[dateStr];
             if (infoDia) totalSeriesSemana += infoDia.seriesTotales;
             ultimos7Dias.push({

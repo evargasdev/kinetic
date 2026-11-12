@@ -41,6 +41,33 @@ const GymCard = React.memo(function GymCard({ item, isFavorite, onToggleFavorite
     );
 });
 
+const FAVORITES_KEY = "gym_favorites";
+const TOMTOM_API_KEY = process.env.EXPO_PUBLIC_TOMTOM_API_KEY;
+
+// Consulta TomTom y normaliza los resultados.
+// Con texto busca en 50 km; sin texto busca "gimnasio" en el radio elegido.
+async function buscarGimnasios({ lat, lng, query, radiusKm, signal, t }) {
+    if (!TOMTOM_API_KEY) {
+        throw new Error("Falta EXPO_PUBLIC_TOMTOM_API_KEY en .env");
+    }
+    const termino = encodeURIComponent(query || "gimnasio");
+    const radio = query ? 50000 : radiusKm * 1000;
+    const url = `https://api.tomtom.com/search/2/search/${termino}.json?key=${TOMTOM_API_KEY}&lat=${lat}&lon=${lng}&radius=${radio}&limit=20`;
+
+    const response = await fetch(url, { signal });
+    const data = await response.json();
+    if (!response.ok || !data.results) {
+        throw new Error(data.error?.description || "Error API");
+    }
+    return data.results.map(result => ({
+        place_id: result.id,
+        name: result.poi?.name || t("unnamed_gym"),
+        address: result.address?.freeformAddress || t("no_address"),
+        phone: result.poi?.phone || null,
+        distance: result.distance ? (result.distance / 1000).toFixed(1) : null,
+    }));
+}
+
 export default function ScreenGym() {
     const { t } = useTranslation(); // Activamos el motor de idiomas
     const [location, setLocation] = useState(null);
@@ -53,53 +80,69 @@ export default function ScreenGym() {
     const [search, setSearch] = useState("");
     const [selectedRadio, setSelectedRadio] = useState(5); 
 
-    useEffect(() => {
-        loadFavorites();
-        getUserLocation();
-    }, []);
-
+    // Única fuente de búsqueda: se relanza al cambiar ubicación, texto o radio.
+    // Se usa debounce + AbortController para evitar resultados viejos fuera de orden.
     useEffect(() => {
         if (showFavorites) {
             setLoading(false);
             setError(null);
             return;
         }
+        if (!location) return;
 
-        if (!location?.latitude || !location?.longitude) {
-            return;
-        }
-
-        const timer = setTimeout(() => {
-            fetchNearbyGyms(location.latitude, location.longitude);
+        const controller = new AbortController();
+        const timer = setTimeout(async () => {
+            setLoading(true);
+            setError(null);
+            try {
+                const resultados = await buscarGimnasios({
+                    lat: location.latitude,
+                    lng: location.longitude,
+                    query: search.trim(),
+                    radiusKm: selectedRadio,
+                    signal: controller.signal,
+                    t,
+                });
+                setGyms(resultados);
+            } catch (e) {
+                if (e.name === 'AbortError') return;
+                console.error("Error buscando gimnasios:", e.message);
+                setError(t("search_error"));
+            } finally {
+                if (!controller.signal.aborted) setLoading(false);
+            }
         }, 450);
 
-        return () => clearTimeout(timer);
-    }, [search, selectedRadio, showFavorites, location?.latitude, location?.longitude]);
+        return () => {
+            clearTimeout(timer);
+            controller.abort();
+        };
+    }, [search, selectedRadio, showFavorites, location, t]);
 
     const loadFavorites = useCallback(async () => {
         try {
-            const stored = await AsyncStorage.getItem("gym_favorites");
+            const stored = await AsyncStorage.getItem(FAVORITES_KEY);
             if (stored) setFavorites(JSON.parse(stored));
-        } catch (e) {
-            console.error("Error cargando favoritos:", e);
+        } catch (_e) {
+            console.error("Error cargando favoritos:", _e);
         }
     }, []);
 
-    const toggleFavorite = useCallback(async (gym) => {
-        try {
-            const isFav = favorites.some(f => f.place_id === gym.place_id);
+    const toggleFavorite = useCallback((gym) => {
+        setFavorites((prev) => {
+            const isFav = prev.some(f => f.place_id === gym.place_id);
             const updated = isFav
-                ? favorites.filter(f => f.place_id !== gym.place_id)
-                : [...favorites, gym];
-            setFavorites(updated);
-            await AsyncStorage.setItem("gym_favorites", JSON.stringify(updated));
-        } catch (e) {
-            console.error("Error guardando favorito:", e);
-        }
-    }, [favorites]);
+                ? prev.filter(f => f.place_id !== gym.place_id)
+                : [...prev, gym];
+            AsyncStorage.setItem(FAVORITES_KEY, JSON.stringify(updated))
+                .catch(e => console.error("Error guardando favorito:", e));
+            return updated;
+        });
+    }, []);
 
     const isFavorite = useCallback((gym) => favorites.some(f => f.place_id === gym.place_id), [favorites]);
 
+    // Solo obtiene la ubicación; la búsqueda la dispara el efecto de arriba.
     const getUserLocation = useCallback(async () => {
         try {
             setLoading(true);
@@ -113,57 +156,18 @@ export default function ScreenGym() {
             const loc = await Location.getCurrentPositionAsync({
                 accuracy: Location.Accuracy.High,
             });
-            setLocation(loc.coords);
-            await fetchNearbyGyms(loc.coords.latitude, loc.coords.longitude);
-        } catch (e) {
+            // Objeto nuevo => el efecto vuelve a buscar aunque las coordenadas no cambien
+            setLocation({ latitude: loc.coords.latitude, longitude: loc.coords.longitude });
+        } catch (_e) {
             setError(t("loc_error"));
             setLoading(false);
         }
-    }, [t, selectedRadio, search]);
+    }, [t]);
 
-    const fetchNearbyGyms = useCallback(async (lat, lng) => {
-        const apiKey = process.env.EXPO_PUBLIC_TOMTOM_API_KEY || '38r6oqYIM7Zxp8mhmPnanSfhZkB8QknU';
-        if (!apiKey) {
-            setError(t("search_error"));
-            setLoading(false);
-            return;
-        }
-
-        let url = "";
-
-        if (search.trim().length > 0) {
-            const queryClean = encodeURIComponent(search);
-            url = `https://api.tomtom.com/search/2/search/${queryClean}.json?key=${apiKey}&lat=${lat}&lon=${lng}&radius=50000&limit=20`;
-        } else {
-            const radiusInMeters = selectedRadio * 1000;
-            url = `https://api.tomtom.com/search/2/search/gimnasio.json?key=${apiKey}&lat=${lat}&lon=${lng}&radius=${radiusInMeters}&limit=20`;
-        }
-
-        try {
-            const response = await fetch(url);
-            const data = await response.json();
-
-            if (!response.ok || !data.results) {
-                throw new Error(data.error?.description || 'Error API');
-            }
-
-            const formattedGyms = data.results.map(result => ({
-                place_id: result.id,
-                name: result.poi?.name || t("unnamed_gym"),
-                address: result.address?.freeformAddress || t("no_address"),
-                phone: result.poi?.phone || null,
-                distance: result.distance ? (result.distance / 1000).toFixed(1) : null
-            }));
-
-            setGyms(formattedGyms); 
-    
-        } catch (e) {
-            console.error("ERROR:", e.message);
-            setError(t("search_error"));
-        } finally {
-            setLoading(false);
-        }
-    }, [search, selectedRadio, t]);
+    useEffect(() => {
+        loadFavorites();
+        getUserLocation();
+    }, [loadFavorites, getUserLocation]);
 
     const openInMaps = useCallback((gym) => {
         const query = encodeURIComponent(`${gym.name} ${gym.address}`);

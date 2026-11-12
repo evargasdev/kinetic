@@ -1,34 +1,11 @@
 import { useNavigation } from '@react-navigation/native';
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { ActivityIndicator, FlatList, ScrollView, StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import { Searchbar } from 'react-native-paper';
 // ⚡ Importación de la librería moderna para renderizar GIFs correctamente
 import { Image } from 'expo-image';
-
-const translationCache = new Map();
-
-// Función para traducir textos individuales en tiempo real
-const traducirAlEspanol = async (texto) => {
-  if (!texto) return "";
-  const key = texto.toLowerCase().trim();
-
-  if (translationCache.has(key)) {
-    return translationCache.get(key);
-  }
-
-  try {
-    const response = await fetch(
-      `https://translate.googleapis.com/translate_a/single?client=gtx&sl=en&tl=es&dt=t&q=${encodeURIComponent(texto)}`
-    );
-    const data = await response.json();
-    const traducido = data[0][0][0];
-    translationCache.set(key, traducido);
-    return traducido;
-  } catch (error) {
-    return texto; 
-  }
-};
+import { traducirAlEspanol } from '../../utils/traducir';
 
 const CATEGORIES = ['all', 'chest', 'back', 'arms', 'shoulders', 'legs', 'core', 'cardio'];
 
@@ -66,15 +43,8 @@ export default function ScreenLibrary() {
   const [activeFilter, setActiveFilter] = useState('all');
   const requestIdRef = useRef(0);
 
-  useEffect(() => {
-    const delayDebounce = setTimeout(() => {
-      obtenerEjercicios();
-    }, 500);
 
-    return () => clearTimeout(delayDebounce);
-  }, [buscar, activeFilter, i18n.language]);
-
-  const obtenerEjercicios = async () => {
+  const obtenerEjercicios = useCallback(async () => {
     const requestId = ++requestIdRef.current;
 
     try {
@@ -99,7 +69,7 @@ export default function ScreenLibrary() {
             if (response.status === 404) return [];
             const result = await response.json();
             return result.data ? result.data : (Array.isArray(result) ? result : []);
-          } catch (e) {
+          } catch (_e) {
             return [];
           }
         });
@@ -152,7 +122,16 @@ export default function ScreenLibrary() {
         setLoadingTranslation(false);
       }
     }
-  };
+  }, [buscar, activeFilter, i18n.language]);
+
+  // Debounce: espera a que el usuario deje de escribir antes de consultar la API
+  useEffect(() => {
+    const delayDebounce = setTimeout(() => {
+      obtenerEjercicios();
+    }, 500);
+
+    return () => clearTimeout(delayDebounce);
+  }, [obtenerEjercicios]);
 
   const capitalizeWords = (text) => {
     if (!text) return "";

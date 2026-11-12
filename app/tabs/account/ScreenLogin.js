@@ -23,9 +23,14 @@ export default function LoginScreen({ navigation }) {
     const [loading, setLoading] = useState(false);
 
     const handleLogin = async () => {
+        const cleanEmail = email.trim().toLowerCase();
+        if (!cleanEmail || !password) {
+            Alert.alert(t("attention", "Attention"), t("fill_credentials", "Enter your email and password."));
+            return;
+        }
         setLoading(true);
         try {
-            const { error } = await supabase.auth.signInWithPassword({ email, password });
+            const { error } = await supabase.auth.signInWithPassword({ email: cleanEmail, password });
             if (error) throw error;
         } catch (error) {
             Alert.alert(t("login_error", "Login Error"), error.message);
@@ -35,7 +40,7 @@ export default function LoginScreen({ navigation }) {
     };
 
     const handleResetPassword = async () => {
-        if (!email) {
+        if (!email.trim()) {
             Alert.alert(
                 t("attention", "Attention"), 
                 t("email_required_for_recovery", "Please enter your email address first to send the recovery link.")
@@ -44,7 +49,7 @@ export default function LoginScreen({ navigation }) {
         }
         try {
             const redirectUrl = 'kinetic://reset-password';
-            const { error } = await supabase.auth.resetPasswordForEmail(email, { redirectTo: redirectUrl });
+            const { error } = await supabase.auth.resetPasswordForEmail(email.trim().toLowerCase(), { redirectTo: redirectUrl });
             if (error) throw error;
             Alert.alert(
                 t("email_sent", "Email Sent"), 

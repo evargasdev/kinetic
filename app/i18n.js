@@ -284,6 +284,7 @@ const resources = {
 const locales = Localization.getLocales();
 const deviceLanguage = locales && locales.length > 0 ? locales[0].languageCode : 'es';
 
+// eslint-disable-next-line import/no-named-as-default-member -- API estándar de i18next
 i18n
     .use(initReactI18next)
     .init({

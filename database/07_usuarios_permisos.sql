@@ -63,15 +63,22 @@ GRANT SELECT ON ALL TABLES IN SCHEMA public TO kinetic_readonly;
 --                       bypass de RLS.
 -- ------------------------------------------------------------
 
--- Ejemplo de política diferenciada para un rol "admin" aplicativo,
+-- Política diferenciada para el rol "admin"/"tester" de la aplicación,
 -- igual al patrón "Admins y Testers pueden ver todos los perfiles"
--- ya presente en la tabla usuarios (ver captura adjunta). El rol
--- se lee del custom claim "role" incluido en el JWT de Supabase Auth.
-CREATE POLICY IF NOT EXISTS "admins_pueden_ver_todo_progreso"
+-- ya presente en la tabla usuarios (ver captura adjunta).
+-- Nota: el claim "role" del JWT de Supabase siempre vale 'authenticated',
+-- por eso el rol de la app se consulta en public.usuarios.rol.
+-- PostgreSQL no admite CREATE POLICY IF NOT EXISTS: se elimina y se recrea.
+DROP POLICY IF EXISTS "admins_pueden_ver_todo_progreso" ON public.registro_progreso;
+CREATE POLICY "admins_pueden_ver_todo_progreso"
     ON public.registro_progreso FOR SELECT
     USING (
         auth.uid() = usuario_id
-        OR (auth.jwt() ->> 'role') IN ('admin', 'tester')
+        OR EXISTS (
+            SELECT 1 FROM public.usuarios u
+            WHERE u.usuario_id = auth.uid()
+              AND u.rol IN ('admin', 'tester')
+        )
     );
 
 -- ============================================================

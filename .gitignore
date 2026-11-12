@@ -48,3 +48,8 @@ app-example
 # Llaves de Firebase
 google-services.json
 *-firebase-adminsdk-*.json
+
+# Variables de entorno locales (no subir claves al repositorio)
+.env
+.env.*
+!.env.example

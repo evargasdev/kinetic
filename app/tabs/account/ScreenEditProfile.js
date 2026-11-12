@@ -38,7 +38,7 @@ export default function ScreenEditProfile() {
 
   useEffect(() => {
     if (profile) {
-      setNombre(profile.nombre || user?.nombre || "");
+      setNombre(profile.nombre || "");
       setEdad(profile.edad?.toString() || "");
       setPeso(profile.peso_kg?.toString() || "");
       setAltura(profile.altura_cm?.toString() || "");
@@ -50,11 +50,27 @@ export default function ScreenEditProfile() {
   const guardarCambios = async () => {
     if (!user?.id) return;
 
+    // Convierte a número; vacío => null. Acepta coma decimal ("72,5").
+    const aNumero = (valor, parser) => {
+      const limpio = valor.trim().replace(",", ".");
+      return limpio === "" ? null : parser(limpio);
+    };
+    const edadNum = aNumero(edad, (v) => parseInt(v, 10));
+    const pesoNum = aNumero(peso, parseFloat);
+    const alturaNum = aNumero(altura, (v) => parseInt(v, 10));
+
+    // Rangos razonables para evitar datos imposibles (o NaN) en la base
+    const fueraDeRango = (n, min, max) => n !== null && (Number.isNaN(n) || n < min || n > max);
+    if (!nombre.trim() || fueraDeRango(edadNum, 10, 120) || fueraDeRango(pesoNum, 20, 400) || fueraDeRango(alturaNum, 80, 260)) {
+      Alert.alert(t("error"), "Revisa los datos: nombre obligatorio, edad 10-120, peso 20-400 kg, altura 80-260 cm.");
+      return;
+    }
+
     const payload = {
-      nombre: nombre,
-      edad: parseInt(edad) || null,
-      peso_kg: parseFloat(peso) || null,
-      altura_cm: parseInt(altura) || null,
+      nombre: nombre.trim(),
+      edad: edadNum,
+      peso_kg: pesoNum,
+      altura_cm: alturaNum,
       nivel_experiencia: nivel,
       objetivo: objetivo,
     };

@@ -1,7 +1,6 @@
-import { useNavigation, useRoute } from '@react-navigation/native';
+import { useRoute } from '@react-navigation/native';
 import * as Linking from 'expo-linking';
-import * as Localization from 'expo-localization'; // ✅ Se agregó para detectar el idioma del celular
-import { useContext, useEffect, useMemo, useState } from 'react';
+import { useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
   Alert,
@@ -28,11 +27,13 @@ const parseParamsFromUrl = async () => {
 };
 
 export default function ScreenResetPassword() {
-  const navigation = useNavigation();
   const route = useRoute();
   
-  // ✅ Se extrajo 'i18n' para poder cambiar el idioma dinámicamente
-  const { t, i18n } = useTranslation(); 
+  const { t } = useTranslation();
+  // Ref para usar t() dentro del efecto sin relanzarlo (el código del enlace
+  // solo puede canjearse una vez; repetir el efecto daría error).
+  const tRef = useRef(t);
+  tRef.current = t;
   
   const { setNeedsPasswordReset, logout } = useContext(AuthContext);
 
@@ -49,15 +50,8 @@ export default function ScreenResetPassword() {
 
     const prepareSession = async () => {
       try {
-        // ✅ 1. Detectar el idioma del celular y aplicarlo automáticamente
-        const deviceLanguage = Localization.getLocales()[0].languageCode; 
-        const supportedLang = deviceLanguage === 'es' ? 'es' : 'en'; 
-        
-        if (i18n.language !== supportedLang) {
-          await i18n.changeLanguage(supportedLang);
-        }
-
-        // 2. Lógica original de supabase
+        // El idioma ya se detecta en i18n.js; no se fuerza aquí para respetar
+        // el idioma que el usuario haya elegido en su perfil.
         const mergedParams = { ...(await parseParamsFromUrl()), ...params };
         const accessToken = mergedParams.access_token || mergedParams.accessToken;
         const refreshToken = mergedParams.refresh_token || mergedParams.refreshToken;
@@ -77,7 +71,7 @@ export default function ScreenResetPassword() {
         if (mounted) setSessionReady(true);
       } catch (error) {
         if (mounted) {
-          Alert.alert(t('error', 'Error'), error.message || t('error_recovery_link', 'No se pudo abrir el enlace de recuperación.'));
+          Alert.alert(tRef.current('error', 'Error'), error.message || tRef.current('error_recovery_link', 'No se pudo abrir el enlace de recuperación.'));
         }
       } finally {
         if (mounted) setLoading(false);

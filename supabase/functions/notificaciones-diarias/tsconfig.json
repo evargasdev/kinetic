@@ -10,8 +10,7 @@
     "resolveJsonModule": true,
     "declaration": true,
     "declarationMap": true,
-    "sourceMap": true,
-    "types": ["deno.window", "deno.worker"]
+    "sourceMap": true
   },
   "include": ["*.ts"],
   "exclude": ["node_modules"]

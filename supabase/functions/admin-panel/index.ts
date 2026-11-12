@@ -1,7 +1,10 @@
 import { serve } from 'https://deno.land/std@0.208.0/http/server.ts';
-import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
+import { createClient, type SupabaseClient } from 'https://esm.sh/@supabase/supabase-js@2';
 
 type AdminAction = 'list' | 'update-role' | 'toggle-active' | 'delete-user';
+
+const ROLES_VALIDOS = ['user', 'tester', 'admin'] as const;
+type Rol = (typeof ROLES_VALIDOS)[number];
 
 // Cabeceras CORS necesarias para permitir peticiones desde localhost y Expo Web
 const corsHeaders = {
@@ -21,178 +24,145 @@ function jsonResponse(body: unknown, init: ResponseInit = {}) {
   });
 }
 
+const error = (message: string, status: number) => jsonResponse({ error: message }, { status });
+
+// listUsers() pagina (50 por defecto): se recorren todas las páginas para no perder correos.
+async function obtenerEmails(adminClient: SupabaseClient): Promise<Map<string, string>> {
+  const emailMap = new Map<string, string>();
+  const perPage = 1000;
+  for (let page = 1; ; page++) {
+    const { data, error: authError } = await adminClient.auth.admin.listUsers({ page, perPage });
+    if (authError) throw authError;
+    for (const u of data.users) {
+      if (u.id && u.email) emailMap.set(u.id, u.email);
+    }
+    if (data.users.length < perPage) break;
+  }
+  return emailMap;
+}
+
 serve(async (req: Request) => {
-  // Manejo del Preflight de CORS (Petición OPTIONS)
+  // Preflight de CORS
   if (req.method === 'OPTIONS') {
-    return new Response('ok', { 
-      status: 200, 
-      headers: corsHeaders 
-    });
+    return new Response('ok', { status: 200, headers: corsHeaders });
   }
 
   try {
-    if (req.method !== 'POST') {
-      return jsonResponse({ error: 'Method not allowed' }, { status: 405 });
-    }
+    if (req.method !== 'POST') return error('Method not allowed', 405);
 
     const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
     const serviceRoleKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
     const authHeader = req.headers.get('Authorization');
+    if (!authHeader) return error('Unauthorized', 401);
 
-    if (!authHeader) {
-      return jsonResponse({ error: 'Unauthorized' }, { status: 401 });
-    }
-
-    // Validar el token JWT del usuario que hace la petición
+    // Validar el JWT del usuario que hace la petición
     const userClient = createClient(supabaseUrl, Deno.env.get('SUPABASE_ANON_KEY') ?? '', {
       global: { headers: { Authorization: authHeader } },
     });
-
     const { data: userResult, error: userError } = await userClient.auth.getUser();
-    if (userError || !userResult.user) {
-      return jsonResponse({ error: 'Unauthorized' }, { status: 401 });
-    }
+    if (userError || !userResult.user) return error('Unauthorized', 401);
+    const callerId = userResult.user.id;
 
-    // Verificar si el usuario es administrador en la base de datos
+    // Verificar que sea administrador activo
     const adminClient = createClient(supabaseUrl, serviceRoleKey);
     const { data: callerProfile, error: callerError } = await adminClient
       .from('usuarios')
-      .select('rol')
-      .eq('usuario_id', userResult.user.id)
+      .select('rol, activo')
+      .eq('usuario_id', callerId)
       .maybeSingle();
 
-    if (callerError || callerProfile?.rol !== 'admin') {
-      return jsonResponse({ error: 'Forbidden' }, { status: 403 });
+    if (callerError || callerProfile?.rol !== 'admin' || callerProfile?.activo === false) {
+      return error('Forbidden', 403);
     }
 
-// Reemplaza la línea vieja de const body = await req.json().catch(...) por esto:
-let body: any = {};
-try {
-  const rawBody = await req.text();
-  body = rawBody ? JSON.parse(rawBody) : {};
-} catch (e) {
-  return jsonResponse({ error: 'Invalid JSON body' }, { status: 400 });
-}
+    let body: Record<string, unknown> = {};
+    try {
+      const rawBody = await req.text();
+      body = rawBody ? JSON.parse(rawBody) : {};
+    } catch (_e) {
+      return error('Invalid JSON body', 400);
+    }
 
-const action = body.action as AdminAction;
+    const action = body.action as AdminAction;
+    const userId = typeof body.userId === 'string' ? body.userId : undefined;
 
-// --- ACCIÓN: LISTAR USUARIOS ---
-if (action === 'list') {
-  const search = typeof body.search === 'string' ? body.search.trim() : '';
-  const role = typeof body.role === 'string' ? body.role : 'all';
+    // Un admin no puede quitarse el rol, suspenderse ni borrarse a sí mismo
+    // (evita quedarse sin ningún administrador por accidente).
+    if (action !== 'list' && userId === callerId) {
+      return error('No puedes modificar tu propia cuenta de administrador', 400);
+    }
 
-  // 1. Traemos todos los usuarios desde la tabla pública
-  const { data: usuariosData, error: usuariosError } = await adminClient
-    .from('usuarios')
-    .select('id, usuario_id, nombre, edad, peso_kg, altura_cm, nivel_experiencia, objetivo, foto_url, rol, activo')
-    .order('nombre', { ascending: true });
+    // --- LISTAR USUARIOS ---
+    if (action === 'list') {
+      const search = typeof body.search === 'string' ? body.search.trim().toLowerCase() : '';
+      const role = typeof body.role === 'string' ? body.role : 'all';
 
-  if (usuariosError) {
-    return jsonResponse({ error: usuariosError.message }, { status: 500 });
-  }
+      const { data: usuariosData, error: usuariosError } = await adminClient
+        .from('usuarios')
+        .select('id, usuario_id, nombre, edad, peso_kg, altura_cm, nivel_experiencia, objetivo, foto_url, rol, activo')
+        .order('nombre', { ascending: true });
+      if (usuariosError) return error(usuariosError.message, 500);
 
-  // 2. Traemos todos los usuarios del sistema de Autenticación de Supabase (aquí están los emails)
-  const { data: authData, error: authError } = await adminClient.auth.admin.listUsers();
+      const emailMap = await obtenerEmails(adminClient);
 
-  if (authError) {
-    return jsonResponse({ error: authError.message }, { status: 500 });
-  }
+      const users = (usuariosData ?? [])
+        .map((item) => ({
+          id: item.id,
+          userId: item.usuario_id,
+          nombre: item.nombre,
+          email: emailMap.get(item.usuario_id) ?? null,
+          role: item.rol ?? 'user',
+          active: item.activo ?? true,
+          edad: item.edad,
+          peso_kg: item.peso_kg,
+          altura_cm: item.altura_cm,
+          nivel_experiencia: item.nivel_experiencia,
+          objetivo: item.objetivo,
+          foto_url: item.foto_url,
+        }))
+        .filter((item) => {
+          const matchesSearch = !search || `${item.nombre ?? ''} ${item.email ?? ''}`.toLowerCase().includes(search);
+          const matchesRole = role === 'all' || item.role === role;
+          return matchesSearch && matchesRole;
+        });
 
-  // Crear un mapa rápido de usuario_id -> email para cruzar los datos eficientemente
-  const emailMap = new Map<string, string>();
-  if (authData && authData.users) {
-    authData.users.forEach((u: any) => {
-      if (u.id && u.email) {
-        emailMap.set(u.id, u.email);
-      }
-    });
-  }
+      return jsonResponse({ users });
+    }
 
-  // 3. Cruzamos los datos en memoria
-  const users = (usuariosData ?? [])
-    .map((item: any) => ({
-      id: item.id,
-      userId: item.usuario_id,
-      nombre: item.nombre,
-      // Buscamos el email usando el usuario_id del perfil
-      email: emailMap.get(item.usuario_id) ?? null, 
-      role: item.rol ?? 'user',
-      active: item.activo ?? true,
-      edad: item.edad,
-      peso_kg: item.peso_kg,
-      altura_cm: item.altura_cm,
-      nivel_experiencia: item.nivel_experiencia,
-      objetivo: item.objetivo,
-      foto_url: item.foto_url,
-    }))
-    .filter((item: any) => {
-      const matchesSearch = !search || `${item.nombre ?? ''} ${item.email ?? ''}`.toLowerCase().includes(search.toLowerCase());
-      const matchesRole = role === 'all' || item.role === role;
-      return matchesSearch && matchesRole;
-    });
-
-  return jsonResponse({ users });
-}
-
-    // --- ACCIÓN: ACTUALIZAR ROL ---
+    // --- ACTUALIZAR ROL ---
     if (action === 'update-role') {
-      const { userId, role } = body as { userId?: string; role?: string };
-      if (!userId || !role) {
-        return jsonResponse({ error: 'Missing parameters' }, { status: 400 });
-      }
+      const role = body.role as Rol;
+      if (!userId || !ROLES_VALIDOS.includes(role)) return error('Missing or invalid parameters', 400);
 
-      const { error } = await adminClient
-        .from('usuarios')
-        .update({ rol: role })
-        .eq('usuario_id', userId);
-
-      if (error) {
-        return jsonResponse({ error: error.message }, { status: 500 });
-      }
-
+      const { error: dbError } = await adminClient.from('usuarios').update({ rol: role }).eq('usuario_id', userId);
+      if (dbError) return error(dbError.message, 500);
       return jsonResponse({ success: true });
     }
 
-    // --- ACCIÓN: ACTIVAR/DESACTIVAR USUARIO ---
+    // --- ACTIVAR / SUSPENDER ---
     if (action === 'toggle-active') {
-      const { userId, active } = body as { userId?: string; active?: boolean };
-      if (!userId || typeof active !== 'boolean') {
-        return jsonResponse({ error: 'Missing parameters' }, { status: 400 });
-      }
+      const active = body.active;
+      if (!userId || typeof active !== 'boolean') return error('Missing parameters', 400);
 
-      const { error } = await adminClient
-        .from('usuarios')
-        .update({ activo: active })
-        .eq('usuario_id', userId);
-
-      if (error) {
-        return jsonResponse({ error: error.message }, { status: 500 });
-      }
-
+      const { error: dbError } = await adminClient.from('usuarios').update({ activo: active }).eq('usuario_id', userId);
+      if (dbError) return error(dbError.message, 500);
+      // La app cierra la sesión del usuario suspendido al cargar su perfil (AuthContext)
       return jsonResponse({ success: true });
     }
 
-    // --- ACCIÓN: ELIMINAR USUARIO ---
-// --- ACCIÓN: ELIMINAR USUARIO ---
-if (action === 'delete-user') {
-  const { userId } = body as { userId?: string };
-  if (!userId) {
-    return jsonResponse({ error: 'Missing parameters' }, { status: 400 });
-  }
+    // --- ELIMINAR USUARIO ---
+    if (action === 'delete-user') {
+      if (!userId) return error('Missing parameters', 400);
 
-  // Eliminación directa desde el sistema de Auth de Supabase (borra el perfil si tienes ON DELETE CASCADE)
-  const { error } = await adminClient.auth.admin.deleteUser(userId);
-  
-  if (error) {
-    return jsonResponse({ error: error.message }, { status: 500 });
-  }
+      // Borra el usuario de Auth (el perfil se elimina si la FK tiene ON DELETE CASCADE)
+      const { error: authError } = await adminClient.auth.admin.deleteUser(userId);
+      if (authError) return error(authError.message, 500);
+      return jsonResponse({ success: true });
+    }
 
-  return jsonResponse({ success: true });
-}
-
-    return jsonResponse({ error: 'Unknown action' }, { status: 400 });
-  } catch (error) {
-    const message = error instanceof Error ? error.message : 'Internal server error';
-    return jsonResponse({ error: message }, { status: 500 });
+    return error('Unknown action', 400);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'Internal server error';
+    return error(message, 500);
   }
 });

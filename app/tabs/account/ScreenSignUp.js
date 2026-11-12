@@ -21,35 +21,45 @@ export default function RegisterScreen({ navigation }) {
     const [loading, setLoading] = useState(false);
 
     const handleRegister = async () => {
+        const cleanEmail = email.trim().toLowerCase();
+        if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleanEmail)) {
+            Alert.alert("Correo inválido", "Escribe un correo electrónico válido.");
+            return;
+        }
+        if (password.length < 6) {
+            Alert.alert("Contraseña débil", "La contraseña debe tener al menos 6 caracteres.");
+            return;
+        }
+
         setLoading(true);
         try {
             const { data, error } = await supabase.auth.signUp({
-                email,
+                email: cleanEmail,
                 password,
                 options: {
                     data: {
-                        nombre: email.split("@")[0],
+                        nombre: cleanEmail.split("@")[0],
                     },
                 },
             });
 
             if (error) throw error;
-    
-            if (data.user && data.user.identities && data.user.identities.length === 0) {
-                 Alert.alert(
-                    "Registro casi completo",
-                    "Por favor, revisa tu correo para confirmar tu cuenta."
-                );
-            } else {
-                Alert.alert(
-                    "Registro exitoso",
-                    "¡Tu cuenta ha sido creada!"
-                );
+
+            // Supabase devuelve identities vacío cuando el correo YA está registrado
+            if (data.user && data.user.identities?.length === 0) {
+                Alert.alert("Correo ya registrado", "Ya existe una cuenta con este correo. Inicia sesión o recupera tu contraseña.");
+                return;
             }
-    
-            navigation.goBack();
-    
-        } catch(error){
+
+            if (!data.session) {
+                // Confirmación por correo activada: aún no hay sesión
+                Alert.alert("Registro casi completo", "Revisa tu correo para confirmar tu cuenta.");
+                navigation.goBack();
+            } else {
+                // Con sesión activa, AuthContext cambia automáticamente a la app
+                Alert.alert("Registro exitoso", "¡Tu cuenta ha sido creada!");
+            }
+        } catch (error) {
             Alert.alert("Error en el registro", error.message);
         } finally {
             setLoading(false);

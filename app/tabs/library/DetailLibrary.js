@@ -1,62 +1,62 @@
 import React, { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { ActivityIndicator, Image, ScrollView, StyleSheet, Text, View } from 'react-native';
-
-const traducirAlEspanol = async (texto) => {
-  if (!texto) return "";
-  try {
-    const response = await fetch(
-      `https://translate.googleapis.com/translate_a/single?client=gtx&sl=en&tl=es&dt=t&q=${encodeURIComponent(texto)}`
-    );
-    const data = await response.json();
-    return data[0][0][0];
-  } catch (error) {
-    return texto;
-  }
-};
+import { ActivityIndicator, Image, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { traducirAlEspanol } from '../../utils/traducir';
 
 export default function DetailLibrary({ route }) {
   const { id } = route.params;
   const { i18n } = useTranslation();
   const [ejercicios, setEjercicios] = useState(null);
+  const [error, setError] = useState(false);
+  const [reintento, setReintento] = useState(0);
 
-  const obtenerEjercicios = async () => {
-    try {
-      setEjercicios(null); // Resetea para pintar el loading si cambia el idioma
-      const response = await fetch(`https://oss.exercisedb.dev/api/v1/exercises/${id}`);
-      const result = await response.json();
-      const ex = result.data;
-
-      //Si el idioma seleccionado es Español, traduce toda la ficha técnica
-      if (i18n.language === 'es') {
-        const nombreTraducido = await traducirAlEspanol(ex.name);
-        
-        const musculosTraducidos = await Promise.all(
-          (ex.targetMuscles || []).map(m => traducirAlEspanol(m))
-        );
-        
-        const instruccionesTraducidas = await Promise.all(
-          (ex.instructions || []).map(step => traducirAlEspanol(step))
-        );
-
-        setEjercicios({
-          ...ex,
-          name: nombreTraducido,
-          targetMuscles: musculosTraducidos,
-          instructions: instruccionesTraducidas
-        });
-      } else {
-        // 🇬🇧 Si está en Inglés, renderiza los textos nativos sin llamadas a traductores
-        setEjercicios(ex);
-      }
-    } catch (error) {
-      console.error(error);
-    }
-  };
-
+  // Se recarga si cambia el ejercicio o el idioma
   useEffect(() => {
-    obtenerEjercicios();
-  }, [id, i18n.language]); // Re-ejecuta de inmediato si el usuario cambia el idioma dentro de la pantalla
+    let cancelado = false;
+
+    const obtenerEjercicio = async () => {
+      try {
+        setEjercicios(null);
+        setError(false);
+        const response = await fetch(`https://oss.exercisedb.dev/api/v1/exercises/${id}`);
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const { data: ex } = await response.json();
+        if (!ex) throw new Error("Ejercicio no encontrado");
+
+        let resultado = ex;
+        if (i18n.language === 'es') {
+          const [nombre, musculos, instrucciones] = await Promise.all([
+            traducirAlEspanol(ex.name),
+            Promise.all((ex.targetMuscles || []).map(traducirAlEspanol)),
+            Promise.all((ex.instructions || []).map(traducirAlEspanol)),
+          ]);
+          resultado = { ...ex, name: nombre, targetMuscles: musculos, instructions: instrucciones };
+        }
+        if (!cancelado) setEjercicios(resultado);
+      } catch (err) {
+        console.error("Error cargando ejercicio:", err.message);
+        if (!cancelado) setError(true);
+      }
+    };
+
+    obtenerEjercicio();
+    return () => { cancelado = true; };
+  }, [id, i18n.language, reintento]);
+
+  if (error) {
+    return (
+      <View style={[styles.container, styles.loadingcontent]}>
+        <Text style={styles.stepText}>
+          {i18n.language === 'es' ? "No se pudo cargar el ejercicio." : "Could not load the exercise."}
+        </Text>
+        <TouchableOpacity onPress={() => setReintento((n) => n + 1)} style={{ marginTop: 16 }}>
+          <Text style={[styles.cardTitle, { color: '#88adff' }]}>
+            {i18n.language === 'es' ? "Reintentar" : "Retry"}
+          </Text>
+        </TouchableOpacity>
+      </View>
+    );
+  }
 
   if (!ejercicios) {
     return (
@@ -79,7 +79,7 @@ export default function DetailLibrary({ route }) {
           
           <Image source={{ uri: ejercicios.gifUrl }} style={styles.image} />
 
-          <Text style={styles.title}>{ejercicios.name.toUpperCase()}</Text>
+          <Text style={styles.title}>{(ejercicios.name || "").toUpperCase()}</Text>
 
           <Text style={styles.tag}>{ejercicios.targetMuscles?.join(", ").toUpperCase()}</Text>
 

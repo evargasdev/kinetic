@@ -7,6 +7,7 @@ import { ActivityIndicator, Alert, ScrollView, StyleSheet, Text, TextInput, Touc
 import traducciones from "../../../assets/data/traducciones.json"; // <-- DICCIONARIO LOCAL
 import i18n from "../../i18n";
 import { supabase } from "../../subapaseClient";
+import { fechaLocalISO } from "../../utils/fechas";
 
 
 import { kineticService } from "../../../supabase/kineticService";
@@ -27,7 +28,6 @@ export default function ScreenHistory() {
   const [limiteDiasVisibles, setLimiteDiasVisibles] = useState(7); 
   
   const [dbCompletaAPI, setDbCompletaAPI] = useState([]);
-  const [exercisesAPI, setExercisesAPI] = useState([]);
   const [selectedExercise, setSelectedExercise] = useState(null);
   const [cargandoAPI, setCargandoAPI] = useState(false);
   
@@ -89,13 +89,13 @@ export default function ScreenHistory() {
     return map[musculo.toLowerCase()] || musculo.toUpperCase();
   };
 
-  const traducirNombreEjercicio = (nombre) => {
+  const traducirNombreEjercicio = useCallback((nombre) => {
     if (!nombre) return "";
     if (lang !== 'es') return nombre.toUpperCase();
     const nombreLimpio = nombre.toLowerCase().trim();
     const traducido = diccNormalizado[nombreLimpio] || nombre;
     return traducido.toUpperCase();
-  };
+  }, [lang]);
 
   const getDayOfWeekAndMuscles = (dateStr, items) => {
     const dateObj = new Date(`${dateStr}T12:00:00`);
@@ -118,15 +118,19 @@ export default function ScreenHistory() {
     return { dayName, musclesStr };
   };
 
+  // Devuelve la fecha del día elegido en la semana actual, sin pasar de hoy:
+  // si el día elegido aún no llega (p. ej. viernes cuando hoy es martes),
+  // se usa el de la semana pasada para no registrar entrenamientos a futuro.
   const obtenerFechaDeDiaSeleccionado = (diaKey) => {
     const hoy = new Date();
-    const diaActualIndex = hoy.getDay();
     const mapeoDias = { "SUN": 0, "MON": 1, "TUE": 2, "WED": 3, "THU": 4, "FRI": 5, "SAT": 6 };
-    let diferencia = mapeoDias[diaKey] - diaActualIndex;
+    let diferencia = mapeoDias[diaKey] - hoy.getDay();
+    if (diferencia > 0) diferencia -= 7;
     const fechaResultado = new Date(hoy);
     fechaResultado.setDate(hoy.getDate() + diferencia);
-    return fechaResultado.toISOString().split('T')[0];
+    return fechaLocalISO(fechaResultado);
   };
+
 
   useFocusEffect(
     useCallback(() => {
@@ -163,7 +167,7 @@ export default function ScreenHistory() {
         return coincideBusqueda && coincideCategoria;
     }).slice(0, 80);
 
-  }, [selectedCategories, searchQuery, dbCompletaAPI, lang]);
+  }, [selectedCategories, searchQuery, dbCompletaAPI, traducirNombreEjercicio]);
 
   const fetchSupabaseHistory = async () => {
     try {
@@ -230,9 +234,16 @@ export default function ScreenHistory() {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) return;
 
-      const numSeries = parseInt(form.series);
-      const numReps = parseInt(form.repeticiones);
-      const numPeso = parseFloat(form.peso);
+      const numSeries = parseInt(form.series, 10);
+      const numReps = parseInt(form.repeticiones, 10);
+      const numPeso = parseFloat(form.peso.replace(",", "."));
+
+      if (!(numSeries > 0) || !(numReps > 0) || !(numPeso >= 0)) {
+        Alert.alert(t("incomplete_fields"), lang === 'es'
+          ? "Series y repeticiones deben ser mayores que 0, y el peso no puede ser negativo."
+          : "Sets and reps must be greater than 0, and weight cannot be negative.");
+        return;
+      }
       const calculo1RM = numPeso * (1 + numReps / 30);
       const fechaCalculada = obtenerFechaDeDiaSeleccionado(diaSeleccionado);
 
